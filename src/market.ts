@@ -271,6 +271,9 @@ export class Market {
     console.log(`gas limit ${this.gasLimit} · maxFee ${config.maxFeeGwei} gwei · priority ${config.priorityFeeGwei} gwei · ~${perBlock.toFixed(4)} MON per block, ~${(perBlock * 12_000).toFixed(0)} MON per hour`);
   }
 
+  /** Estimated gas for one order at the current gas limit and last known fee (what a live send would be charged). */
+  estGasMon() { return this.gasMon(this.gasLimit, this.feeWei); }
+
   private gasMon(limit: ethers.BigNumber, feeWei: ethers.BigNumber) {
     return Number(ethers.utils.formatEther(limit.mul(feeWei)));
   }

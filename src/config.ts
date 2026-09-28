@@ -33,4 +33,16 @@ export const config = {
   jevUsdPerMTok: 0.042,
   port: Number(env("PORT", "3000")),
   historySize: 1000,
+
+  // ---- cost controls (all off by default, which keeps the original every-block behaviour) ----
+  /** Ask the model (and possibly trade) only every N blocks. 1 = every block. */
+  decideEveryBlocks: Math.max(1, Number(env("DECIDE_EVERY_BLOCKS", "1"))),
+  /** Only post an order when the model's top probability is at least this. 0 = always post. */
+  minConfidence: Number(env("MIN_CONFIDENCE", "0")),
+  /** Skip the transaction when our resting order already has the same side and price we would post. */
+  requoteOnlyOnChange: env("REQUOTE_ONLY_ON_CHANGE", "false") === "true",
+  /** Dry run: charge the estimated gas for every simulated order, so P&L shows what live would cost. */
+  simGas: env("SIM_GAS", "true") === "true",
+  /** Subtract Jev spend from P&L, so pnlUsd is the true net result. */
+  netOfJev: env("NET_OF_JEV", "true") === "true",
 };

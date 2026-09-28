@@ -86,6 +86,7 @@ export class Trader {
     this.totals.blocks++;
     this.confirmPending(block); // off the hot path: receipts for earlier blocks' sends
     if (this.totals.blocks % config.refreshBlocks === 0) this.market.refresh().catch(() => {}); // fee estimate + margin + vault check
+    if ((block % config.decideEveryBlocks) !== 0) return; // cost control: only decide every N blocks; any resting order stays
     if (this.busy) {
       this.totals.lateBlocks++;
       if (this.lastBook) this.emit(block, this.lastBook, null, null, true);
@@ -110,12 +111,22 @@ export class Trader {
       this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
 
       let quote: Quote | null = null;
-      if (side) {
+      const confidence = Math.max(decision.probabilities.buy, decision.probabilities.sell);
+      let skip = false;
+      if (side && confidence < config.minConfidence) {
+        decision.action = "hold"; // not confident enough: post nothing, leave any resting order alone
+        skip = true;
+      } else if (side && config.requoteOnlyOnChange && this.sameAsResting(side, book)) {
+        decision.action = side; // our order is already there at the right price: no new transaction, no gas
+        skip = true;
+      }
+      if (side && !skip) {
         decision.action = side;
         const cancel = [...this.orders.keys()].filter((id) => id > 0); // simulated orders have negative ids
         quote = await this.market.send(block, side, config.tradeSizeMon, book, cancel, side !== wanted);
         this.totals.quotes++;
         if (quote.status === "sim") {
+          if (config.simGas) this.totals.gasMon += this.market.estGasMon(); // what this order would have cost live
           this.orders.clear(); // the simulated cancel
           this.orders.set(--this.simId, { side, price: quote.price, size: quote.size, block });
         } else if (quote.txHash) {
@@ -206,6 +217,17 @@ export class Trader {
     return mon;
   }
 
+  /** Is exactly one order of ours working, on this side, at the price we would post now? */
+  private sameAsResting(side: Side, book: Book) {
+    const all = [...this.orders.values(), ...[...this.inflight.values()].map((q) => ({ side: q.side, price: q.price, size: q.size }))];
+    if (all.length !== 1) return false;
+    const o = all[0]!;
+    if (o.side !== side || o.size <= 0) return false;
+    const eq = (a: number, b: number) => Math.abs(a - b) < 1e-12;
+    // Same price we'd post now, or (live) our own order is the touch on its side: stepping inside it again would just chase ourselves.
+    return eq(o.price, this.market.quotePrice(side, book)) || eq(o.price, side === "buy" ? book.bid : book.ask);
+  }
+
   /** Would this order, and everything already resting on its side, keep us inside the cap and (live) inside margin funds? */
   private allowed(side: Side, book: Book) {
     const size = config.tradeSizeMon;
@@ -268,7 +290,7 @@ export class Trader {
     const t = this.totals;
     t.gasUsd = t.gasMon * book.mid;
     const unrealized = this.unrealizedUsd(book.mid);
-    t.pnlUsd = t.realizedUsd + unrealized - t.gasUsd;
+    t.pnlUsd = t.realizedUsd + unrealized - t.gasUsd - (config.netOfJev ? t.jevUsd : 0);
     t.pnlMon = t.pnlUsd / book.mid;
     t.pnlPct = (t.pnlUsd / config.bankrollUsd) * 100;
     const size = Math.abs(this.position.mon);
